@@ -178,6 +178,12 @@ input[type=text]{flex:1;min-width:150px}
 .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;display:grid;place-items:center;padding:20px}
 .modal .box{background:var(--surface);border-radius:16px;padding:24px;max-width:400px;width:100%;box-shadow:var(--shadow)}
 .hidden{display:none !important}
+.toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--text);color:var(--bg);
+  padding:11px 18px;border-radius:10px;font-size:13px;line-height:1.5;max-width:88vw;text-align:center;
+  z-index:200;box-shadow:var(--shadow);opacity:0;transition:opacity .25s;pointer-events:none}
+.toast.on{opacity:1}
+textarea.io{width:100%;min-height:120px;padding:10px 12px;border-radius:9px;border:1px solid var(--border);
+  background:var(--surface2);color:var(--text);font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;resize:vertical}
 </style>
 </head>
 <body>
@@ -326,6 +332,13 @@ function vHome(){
   h += '<div class="card"><h2>합격 기준</h2><p class="sub" style="margin:0">'
      + '실제 시험은 1000점 만점에 <b>720점(약 72%) 이상</b>이면 합격입니다. 65문항 130분이며, 문항 중 일부는 '
      + '<b>정답을 2개 이상 선택</b>해야 하는 복수 선택형입니다.</p></div>';
+  h += '<div class="card"><h2>💾 데이터 백업 / 이전</h2>'
+     + '<p class="sub" style="margin:0 0 12px">응시 기록·북마크·설정은 <b>이 브라우저에만</b> 저장됩니다. '
+     + '기기를 바꾸거나 다른 사람과 이어서 쓰려면 아래 버튼으로 데이터를 옮기세요. (서버에 저장되지 않습니다)</p>'
+     + '<div class="row"><button class="btn ghost sm" onclick="exportData()">📥 데이터 내보내기</button>'
+     + '<button class="btn ghost sm" onclick="importData()">📤 데이터 가져오기</button></div>'
+     + '<p class="hint" style="margin:10px 0 0">내보내기: 클립보드 복사 + 백업파일(.json) 다운로드 · '
+     + '가져오기: 파일 선택 또는 붙여넣기 → 복원</p></div>';
   $('#app').innerHTML=h;
 }
 
@@ -697,6 +710,73 @@ function vHistDetail(idx){
     });
   }
   $('#app').innerHTML=h;
+}
+
+/* ============ DATA BACKUP / RESTORE ============ */
+const DATA_KEYS = ['marks','history','theme','cfgN','cfgTime'];   // saa_ 접두사로 저장되는 키
+let _toastTimer=null;
+function toast(msg){
+  let t=$('#toast');
+  if(!t){ t=document.createElement('div'); t.id='toast'; t.className='toast'; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add('on');
+  clearTimeout(_toastTimer); _toastTimer=setTimeout(()=>t.classList.remove('on'),2600);
+}
+function collectData(){
+  const out={};
+  DATA_KEYS.forEach(k=>{ const v=localStorage.getItem('saa_'+k); if(v!==null) out['saa_'+k]=v; });
+  return out;
+}
+function exportData(){
+  const data=collectData();
+  const json=JSON.stringify(data);
+  let cnt=0; try{ cnt=JSON.parse(data['saa_history']||'[]').length; }catch(e){}
+  // 1) 클립보드 복사 (실패해도 다운로드로 대체 가능)
+  if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(json).catch(()=>{}); }
+  // 2) 백업 파일(.json) 다운로드
+  try{
+    const blob=new Blob([json],{type:'application/json'});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    const d=new Date(), pad=n=>String(n).padStart(2,'0');
+    a.href=url; a.download='saa-backup-'+d.getFullYear()+pad(d.getMonth()+1)+pad(d.getDate())+'.json';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(e){}
+  toast('내보내기 완료 · 클립보드 복사 + 파일 다운로드 (응시기록 '+cnt+'개)');
+}
+function importData(){
+  $('#modal').innerHTML =
+    '<div class="modal"><div class="box">'
+    + '<h2 style="margin-top:0">📤 데이터 가져오기</h2>'
+    + '<p class="hint" style="margin:-4px 0 12px">백업 파일(.json)을 선택하거나, 복사한 내용을 아래에 붙여넣으세요. '
+    + '<b style="color:var(--bad)">이 기기의 기존 기록은 덮어써집니다.</b></p>'
+    + '<div class="row" style="margin-bottom:10px"><input type="file" id="ioFile" accept="application/json,.json"></div>'
+    + '<textarea class="io" id="ioText" placeholder="여기에 붙여넣기 (JSON)"></textarea>'
+    + '<div class="row" style="justify-content:flex-end;margin-top:14px">'
+    + '<button class="btn ghost sm" onclick="closeModal()">취소</button>'
+    + '<button class="btn sm" onclick="applyImport()">복원하고 새로고침</button></div>'
+    + '</div></div>';
+  const f=$('#ioFile');
+  f.addEventListener('change',()=>{
+    const file=f.files[0]; if(!file) return;
+    const rd=new FileReader();
+    rd.onload=()=>{ $('#ioText').value=rd.result; };
+    rd.readAsText(file);
+  });
+}
+function applyImport(){
+  const raw=($('#ioText').value||'').trim();
+  if(!raw){ toast('가져올 데이터가 없습니다.'); return; }
+  let data;
+  try{ data=JSON.parse(raw); }catch(e){ toast('형식 오류: JSON을 읽을 수 없습니다.'); return; }
+  if(!data||typeof data!=='object'){ toast('올바른 백업 데이터가 아닙니다.'); return; }
+  const keys=Object.keys(data).filter(k=>k.indexOf('saa_')===0);
+  if(!keys.length){ toast('이 앱의 백업 데이터가 아닙니다.'); return; }
+  try{
+    keys.forEach(k=>{ const v=data[k]; localStorage.setItem(k, typeof v==='string'?v:JSON.stringify(v)); });
+  }catch(e){ toast('저장 실패: '+(e&&e.message||e)); return; }
+  closeModal();
+  location.reload();
 }
 
 /* ============ KEYBOARD ============ */
